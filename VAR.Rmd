@@ -1,0 +1,169 @@
+---
+title: "VAR"
+author: "Patryk Góreczny"
+date: "2024-03-25"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+
+library(tidyr)
+library(dplyr)
+library(stats)
+library(rmarkdown)
+library(zoo)
+library(tseries)
+library(vars)
+WIG <- read.csv("wig_d.csv", sep = ",")
+DAX <- read.csv("^dax_d.csv", sep = ",")
+AEX <- read.csv("^aex_d.csv", sep = ",")
+
+ropa <- read.csv("cb_c_d.csv", sep = ",")
+
+obligacje <- read.csv("10yply_b_d.csv", sep=",")
+
+kurszpln <- read.csv("plneur_d.csv", sep = ",")
+kurszusd <- read.csv("usdeur_d.csv", sep = ",")
+
+dane <- merge(WIG[,c(1,5)],  DAX[,c(1,5)], by = "Data", all = TRUE)
+dane <- merge(dane,  AEX[,c(1,5)], by = "Data", all = TRUE)
+dane <- merge(dane,  ropa[,c(1,5)], by = "Data", all = TRUE) 
+dane <- merge(dane,  obligacje[,c(1,5)], by = "Data", all = TRUE)
+dane <- merge(dane,  kurszpln[,c(1,5)], by = "Data", all = TRUE)
+dane <- merge(dane,  kurszusd[,c(1,5)], by = "Data", all = TRUE)
+names(dane)[2:8] <- c("Zamkniecie_WIG", "Zamkniecie_DAX", "Zamkniecie_AEX", "Zamkniecie_ropa",
+                             "Zamkniecie_obligacje", "Zamkniecie_kurszpln", "Zamkniecie_kurszusd")
+
+
+dane$Zamkniecie_WIG <- dane$Zamkniecie_WIG * dane$Zamkniecie_kurszpln
+dane$Zamkniecie_ropa <- dane$Zamkniecie_ropa * dane$Zamkniecie_kurszusd
+dane$Zamkniecie_obligacje <- dane$Zamkniecie_obligacje * dane$Zamkniecie_kurszpln
+
+
+for(i in c(2:8))
+{
+  dane[,i] <- na.approx(dane[,i], na.rm = FALSE, method = "linear")
+}
+
+dane
+
+```
+
+```{r}
+dane$Zamkniecie_WIG <- dane$Zamkniecie_WIG * dane$Zamkniecie_kurszpln
+dane$Zamkniecie_ropa <- dane$Zamkniecie_ropa * dane$Zamkniecie_kurszusd
+dane$Zamkniecie_obligacje <- dane$Zamkniecie_obligacje * dane$Zamkniecie_kurszpln
+```
+
+
+```{r}
+stopy <- matrix(0,2128,5)
+for (i in 1:2128){
+stopy[i,1] = (dane[i+1,2]-dane[i,2])/dane[i,2]
+stopy[i,2] = (dane[i+1,3]-dane[i,3])/dane[i,3]
+stopy[i,3] = (dane[i+1,4]-dane[i,4])/dane[i,4]
+stopy[i,4] = (dane[i+1,5]-dane[i,5])/dane[i,5]
+stopy[i,5] = (dane[i+1,6]-dane[i,6])/dane[i,6]
+}
+colnames(stopy)= c("WIG","DAX","AEX","Ropa","Obligacje")
+```
+
+Badanie stacjonarności
+```{r}
+stopy <- na.omit(stopy)
+adf.test(stopy[,1],alternative = c("stationary"))
+adf.test(stopy[,2],alternative = c("stationary"))
+adf.test(stopy[,3],alternative = c("stationary"))
+adf.test(stopy[,4],alternative = c("stationary"))
+adf.test(stopy[,5],alternative = c("stationary"))
+```
+Liczba opóźnień
+```{r}
+VARselect(stopy) # wybieramy najmniejsze opoznienie - 1
+```
+Estymacja
+
+```{r}
+model_var1 <- VAR(stopy, p=1) #p - oznacza jakie opoznienie
+summary(model_var1)
+```
+Autokorelacja
+H0: Autokorelacja reszt nie wystepuje
+H1: Autokorelcja występuje
+```{r}
+reszty1 <-model_var1$varresult$WIG$residuals
+Box.test(reszty1, lag =1, type=c("Ljung-Box"))
+
+reszty2 <-model_var1$varresult$DAX$residuals
+Box.test(reszty2, lag =1, type=c("Ljung-Box"))
+
+reszty3 <-model_var1$varresult$AEX$residuals
+Box.test(reszty3, lag =1, type=c("Ljung-Box"))
+
+reszty4 <-model_var1$varresult$Ropa$residuals
+Box.test(reszty4, lag =1, type=c("Ljung-Box"))
+
+reszty5 <-model_var1$varresult$Obligacje$residuals
+Box.test(reszty5, lag =1, type=c("Ljung-Box"))
+```
+P-value dla każdego indeksu przyjęło wartości większe od przyjętego poziomu istotniści (5%).
+Wartości te wskazują na brak autokorelacji reszt modelu. Nie ma konieczności budowania modelu
+Var z opóźnieniem drugiego rzędu.
+
+
+
+```{r}
+# Kombinacje zmiennych
+zmienne <- c("WIG", "DAX", "AEX", "Ropa", "Obligacje")
+
+# Ustawienie siatki wykresów 2x3
+par(mfrow=c(2,3))
+
+# Iteracja przez kombinacje zmiennych i generowanie koleogramów
+for (i in 1:length(zmienne)) {
+  for (j in 1:length(zmienne)) {
+    if (i != j) {
+      acf(model_var1$varresult[[zmienne[i]]]$residuals, main = paste("Autokorelacja dla", zmienne[i], "i", zmienne[j]))
+    }
+  }
+}
+
+```
+Przyczynowość Grangera
+
+```{r}
+# Wyniki testów Granger causality
+WIG_result <- causality(model_var1, cause="WIG")$Granger
+DAX_result <- causality(model_var1, cause="DAX")$Granger
+AEX_result <- causality(model_var1, cause="AEX")$Granger
+Obligacje_result <- causality(model_var1, cause="Obligacje")$Granger
+Ropa_result <- causality(model_var1, cause="Ropa")$Granger
+
+results_df <- data.frame(matrix(nrow = 5, ncol = 3))
+
+# Nadanie nazw kolumn
+colnames(results_df) <- c("Indeks", "pvalue", "Wniosek")
+
+results_df[1,2] <- WIG_result$p.value
+results_df[2,2] <- DAX_result$p.value
+results_df[3,2] <- AEX_result$p.value
+results_df[4,2] <- Obligacje_result$p.value
+results_df[5,2] <- Ropa_result$p.value
+
+results_df[1,1] <- "WIG"
+results_df[2,1] <- "DAX"
+results_df[3,1] <- "AEX"
+results_df[4,1] <- "Obligacje"
+results_df[5,1] <- "Ropa"
+
+results_df[1,3] <- "Wpływa na pozostałe uwzględnione giełdy"
+results_df[2,3] <- "Wpływa na pozostałe uwzględnione giełdy"
+results_df[3,3] <- "Wpływa na pozostałe uwzględnione giełdy"
+results_df[4,3] <- "Wpływa na pozostałe uwzględnione giełdy"
+results_df[5,3] <- "Wpływa na pozostałe uwzględnione giełdy"
+
+results_df
+
+```
+
+
